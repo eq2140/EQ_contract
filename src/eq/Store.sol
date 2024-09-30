@@ -104,11 +104,11 @@ contract Store is BaseContract {
 
     //
     event buyGasEvent(
-        address _from, //购买者
-        uint256 _usdtTokenAmount, //支付usdt
-        uint256 _tokenAmount, // 实际获得的token
-        uint256[] _allocAmountList, //分配金额
-        address[] _allocAddressList //分配地址
+        address _from, 
+        uint256 _usdtTokenAmount, 
+        uint256 _tokenAmount, 
+        uint256[] _allocAmountList, 
+        address[] _allocAddressList 
     );
 
     //
