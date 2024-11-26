@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0
-pragma solidity >=0.8.0 <0.9.0;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
 interface ISign {
     struct Seed {
@@ -13,7 +13,7 @@ interface ISign {
     function checkSign(
         address _toAddress,
         string memory _funcName,
-        bytes32 _hashMessage,
+        bytes32 _messageHash,
         Seed memory _seed
     ) external;
 }

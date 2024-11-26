@@ -1,144 +1,95 @@
-// SPDX-License-Identifier: GPL-3.0
-pragma solidity >=0.8.0 <0.9.0;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
-import "./base/BaseContract.sol";
-import "./interfaces/IToken.sol";
+import "./base/Ownable.sol";
 import "./interfaces/ISign.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract LPPool is BaseContract {
-    
+contract LPPool is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     address public tokenAddress;
-
-    
+    address public signAddress;
     address public lpTokenAddress;
 
-    
+    uint256 public constant MIN_AWARD_ID = 1e18 + 1; // 1000000000000000001
+    uint256 public constant MAX_AWARD_ID = 1e21 - 1; // 99999999999999999999
+
     mapping(uint256 => bool) public awardIdList;
-
-    
     mapping(uint256 => bool) public unDepositLPIdList;
-
-    
     mapping(address => uint256) public lpDepositList;
 
-    
     uint256 public lpTotal;
 
+    event ReceiveAwardEvent(address indexed from, uint256 indexed awardId, uint256 amount);
+    event DepositLPEvent(address indexed from, uint256 amount);
+    event UnDepositLPEvent(uint256 indexed unDepositLPId, address indexed to, uint256 amount);
 
-    event receiveAwardEvent(address _from, uint256 _awardId, uint256 _amount);
 
-    event depositLPEvent(address _from, uint256 _amount);
+    constructor(address _signAddress, address _tokenAddress, address _lpTokenAddress) {
+        require(_signAddress != address(0), "Invalid sign address");
+        require(_tokenAddress != address(0), "Invalid token address");
+        require(_lpTokenAddress != address(0), "Invalid LP token address");
 
-    event unDepositLPEvent(
-        uint256 _unDepositLPId,
-        address _to,
-        uint256 _amount
-    );
-
-    constructor(
-        address _tokenAddress,
-        address _signAddress,
-        address _allowContractAddress
-    ) {
-        tokenAddress = _tokenAddress;
         signAddress = _signAddress;
-        allowContractAddress = _allowContractAddress;
+        tokenAddress = _tokenAddress;
+        lpTokenAddress = _lpTokenAddress;
     }
 
-    
-    function setTokenAddress(address _address) public onlyOwner {
-        tokenAddress = _address;
-    }
+  
 
-    
-    function setLPTokenAddress(address _address) public onlyOwner {
-        lpTokenAddress = _address;
-    }
+    function receiveAward(uint256 _awardId, uint256 _amount, ISign.Seed memory _seed) external {
+        require(_awardId > MIN_AWARD_ID && _awardId < MAX_AWARD_ID, "Invalid award ID");
+        require(_amount > 0, "Amount must be greater than 0");
 
-    
-    function receiveAward(
-        uint256 _awardId,
-        uint256 _amount,
-        ISign.Seed memory _seed
-    ) public isHuman isPaused {
+        bytes32 _hashMessage = keccak256(abi.encode(_awardId, _amount));
+        ISign(signAddress).checkSign(msg.sender, "receiveAward", _hashMessage, _seed);
 
-        require(_awardId > 1000000000000000001 && _awardId<99999999999999999999 , "id parameter error");
-
-        require(_amount > 0, "The amount must be greater than 0");
-
-        bytes32 _hashMessage = keccak256(abi.encodePacked(_awardId, _amount));
-        ISign(signAddress).checkSign(
-            msg.sender,
-            "receiveAward",
-            _hashMessage,
-            _seed
-        );
-
-        
-        require(!awardIdList[_awardId], "repeat receive");
-
-        
+        require(!awardIdList[_awardId], "Award ID already received");
         awardIdList[_awardId] = true;
 
-        
-        IToken(tokenAddress).transfer(msg.sender, _amount);
-
-        
-        emit receiveAwardEvent(msg.sender, _awardId, _amount);
+        IERC20(tokenAddress).safeTransfer(msg.sender, _amount);
+        emit ReceiveAwardEvent(msg.sender, _awardId, _amount);
     }
 
-    
-    function depositLP(uint256 _amount) public isHuman isPaused {
+    function depositLP(uint256 _amount) external nonReentrant {
+        require(_amount > 0, "Amount must be greater than 0");
 
-        require(_amount > 0, "The amount must be greater than 0");
+        uint256 balanceBefore = IERC20(lpTokenAddress).balanceOf(address(this));
 
-        require(
-            IToken(lpTokenAddress).allowance(msg.sender, address(this)) >=
-                _amount,
-            "allowance insufficient"
-        );
+        IERC20(lpTokenAddress).safeTransferFrom(msg.sender, address(this), _amount);
 
-        IToken(lpTokenAddress).transferFrom(msg.sender, address(this), _amount);
+        uint256 balanceAfter = IERC20(lpTokenAddress).balanceOf(address(this));
 
-        lpDepositList[msg.sender] += _amount;
-        lpTotal += _amount;
-        emit depositLPEvent(msg.sender, _amount);
+        uint256 actualReceived = balanceAfter - balanceBefore;
+        require(actualReceived > 0, "No tokens received");
+
+        lpDepositList[msg.sender] += actualReceived;
+        lpTotal += actualReceived;
+
+        emit DepositLPEvent(msg.sender, actualReceived);
     }
 
-    
-    function unDepositLP(
-        uint256 _unDepositLPId,
-        uint256 _amount,
-        ISign.Seed memory _seed
-    ) public isHuman isPaused {
+    function unDepositLP(uint256 _unDepositLPId, uint256 _amount, ISign.Seed memory _seed) external nonReentrant {
+        require(_unDepositLPId > MIN_AWARD_ID && _unDepositLPId < MAX_AWARD_ID, "Invalid unDeposit ID");
+        require(_amount > 0, "Amount must be greater than 0");
+        require(lpDepositList[msg.sender] >= _amount, "Insufficient funds");
 
-        require(_unDepositLPId > 1000000000000000001 && _unDepositLPId<99999999999999999999 , "id parameter error");
+        bytes32 _hashMessage = keccak256(abi.encode(_unDepositLPId, _amount));
+        ISign(signAddress).checkSign(msg.sender, "unDepositLP", _hashMessage, _seed);
 
-        require(_amount > 0, "The amount must be greater than 0");
-
-        bytes32 _hashMessage = keccak256(
-            abi.encodePacked(_unDepositLPId, _amount)
-        );
-        ISign(signAddress).checkSign(
-            msg.sender,
-            "unDepositLP",
-            _hashMessage,
-            _seed
-        );
-
-        
-        require(!unDepositLPIdList[_unDepositLPId], "repeat receive");
-
-        require(lpDepositList[msg.sender] >= _amount, "not sufficient funds");
-
+        require(!unDepositLPIdList[_unDepositLPId], "UnDeposit ID already used");
         unDepositLPIdList[_unDepositLPId] = true;
 
-        IToken(lpTokenAddress).transfer(msg.sender, _amount);
-
+        // Update state before interacting with external contracts
         lpDepositList[msg.sender] -= _amount;
-
         lpTotal -= _amount;
 
-        emit unDepositLPEvent(_unDepositLPId, msg.sender, _amount);
+        // Interact with external contract
+        IERC20(lpTokenAddress).safeTransfer(msg.sender, _amount);
+
+        emit UnDepositLPEvent(_unDepositLPId, msg.sender, _amount);
     }
 }

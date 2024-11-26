@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0
-pragma solidity >=0.8.0 <0.9.0;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
 interface IAllowContract {
-    function has(address _addr) external view returns (bool);
+    function isAllowed(address addr) external view returns (bool);
 }

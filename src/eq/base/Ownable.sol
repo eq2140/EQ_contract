@@ -1,68 +1,123 @@
-/**
- * SPDX-License-Identifier: MI231321T
-*/
-pragma solidity >=0.8.0 <0.9.0;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
-abstract contract Context {
-    function _msgSender() internal view virtual returns (address) {
-        return msg.sender;
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+
+abstract contract Ownable {
+    using EnumerableSet for EnumerableSet.AddressSet;
+
+    address private _creator;
+    EnumerableSet.AddressSet private _owners;
+
+    uint256 public requiredSignatures;
+
+    struct Action {
+        uint256 signatureCount;
+        bool executed;
+        mapping(address => bool) signatures;
     }
 
-    function _msgData() internal view virtual returns (bytes calldata) {
-        return msg.data;
-    }
-}
+    mapping(bytes32 => Action) private actions;
 
-abstract contract Ownable is Context {
-    address private _owner;
+    // Events
+    event OwnerAdded(address indexed newOwner);
+    event OwnerRemoved(address indexed removedOwner);
+    event CreatorTransferred(address indexed oldCreator, address indexed newCreator);
+    event RequiredSignaturesChanged(uint256 oldRequiredSignatures, uint256 newRequiredSignatures);
+    event MultiSigActionExecuted(bytes32 indexed actionId);
+    event ActionSigned(bytes32 indexed actionId, address indexed signer);
 
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-
-    /**
-     * @dev Initializes the contract setting the deployer as the initial owner.
-     */
     constructor() {
-        _setOwner(_msgSender());
+        _creator = msg.sender;
+        _owners.add(msg.sender);
+        requiredSignatures = 1;
     }
 
-    /**
-     * @dev Returns the address of the current owner.
-     */
-    function owner() public view virtual returns (address) {
-        return _owner;
+    // Returns the current creator (super-admin)
+    function creator() public view returns (address) {
+        return _creator;
     }
 
-    /**
-     * @dev Throws if called by any account other than the owner.
-     */
-    modifier onlyOwner() {
-        require(owner() == _msgSender(), "Ownable: caller is not the owner");
+    // Returns the list of owners
+    function owners() public view returns (address[] memory) {
+        uint256 length = _owners.length();
+        address[] memory ownerArray = new address[](length);
+        for (uint256 i = 0; i < length; i++) {
+            ownerArray[i] = _owners.at(i);
+        }
+        return ownerArray;
+    }
+
+    // Modifier to allow only the creator
+    modifier onlyCreator() {
+        require(msg.sender == _creator, "Ownable: caller is not the creator");
         _;
     }
 
-    /**
-     * @dev Leaves the contract without owner. It will not be possible to call
-     * `onlyOwner` functions anymore. Can only be called by the current owner.
-     *
-     * NOTE: Renouncing ownership will leave the contract without an owner,
-     * thereby removing any functionality that is only available to the owner.
-     */
-    function renounceOwnership() public virtual onlyOwner {
-       // _setOwner(address(0));
+    // Modifier to allow only owners and handle multi-signature logic
+    modifier onlyOwner() {
+        require(_owners.contains(msg.sender), "Ownable: caller is not an owner");
+
+        if (requiredSignatures > 1) {
+            // Compute actionId based on function signature and parameters
+            bytes32 actionId = keccak256(abi.encode(msg.data));
+
+            Action storage action = actions[actionId];
+            require(!action.executed, "Ownable: action already executed");
+            require(!action.signatures[msg.sender], "Ownable: action already signed by caller");
+
+            action.signatures[msg.sender] = true;
+            action.signatureCount++;
+
+            emit ActionSigned(actionId, msg.sender);
+
+            if (action.signatureCount >= requiredSignatures) {
+                action.executed = true;
+                emit MultiSigActionExecuted(actionId);
+                // Clean up action data to prevent storage growth
+                for(uint256 i; i < _owners.length(); i++){
+                    delete action.signatures[_owners.at(i)];
+                }
+                delete actions[actionId];
+                _;
+            }
+            // If not enough signatures, do not execute the function body
+        } else {
+            _;
+        }
     }
 
-    /**
-     * @dev Transfers ownership of the contract to a new account (`newOwner`).
-     * Can only be called by the current owner.
-     */
-    function transferOwnership(address newOwner) public virtual onlyOwner {
+    // Public function to add a new owner, only callable by the creator
+    function addOwner(address newOwner) public onlyCreator {
         require(newOwner != address(0), "Ownable: new owner is the zero address");
-        _setOwner(newOwner);
+        require(!_owners.contains(newOwner), "Ownable: address is already an owner");
+        _owners.add(newOwner);
+        emit OwnerAdded(newOwner);
     }
 
-    function _setOwner(address newOwner) private {
-        address oldOwner = _owner;
-        _owner = newOwner;
-        emit OwnershipTransferred(oldOwner, newOwner);
+    // Public function to remove an owner, only callable by the creator
+    function removeOwner(address ownerToRemove) public onlyCreator {
+        require(_owners.contains(ownerToRemove), "Ownable: address is not an owner");
+        require(ownerToRemove != address(0), "Ownable: cannot remove the zero address");
+
+        _owners.remove(ownerToRemove);
+        emit OwnerRemoved(ownerToRemove);
+    }
+
+    // Public function to transfer creator role, only callable by the current creator
+    function transferCreator(address newCreator) public onlyCreator {
+        require(newCreator != address(0), "Ownable: new creator is the zero address");
+        emit CreatorTransferred(_creator, newCreator);
+        _creator = newCreator;
+    }
+
+    // Public function to set required signatures, only callable by the creator
+    function setRequiredSignatures(uint256 newRequiredSignatures) public onlyCreator {
+        require(newRequiredSignatures > 0, "Ownable: required signatures must be greater than 0");
+        require(newRequiredSignatures <= _owners.length(), "Ownable: required signatures exceed owner count");
+        uint256 oldRequiredSignatures = requiredSignatures;
+        requiredSignatures = newRequiredSignatures;
+
+        emit RequiredSignaturesChanged(oldRequiredSignatures, newRequiredSignatures);
     }
 }
